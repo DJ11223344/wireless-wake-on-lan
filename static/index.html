@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Wake on LAN</title>
+  <style>
+    body {
+      margin: 0;
+      background-color: #F0EBD8;
+      color: #0D1321;
+      font-family: 'Trebuchet MS', 'Lucida Sans Unicode', 'Lucida Grande', 'Lucida Sans', Arial, sans-serif;
+      letter-spacing: 0.05rem;
+    }
+    .content { max-width: 40rem; margin: 0 auto; padding: 1rem; }
+    button {
+      padding: 0.4rem 0.75rem;
+      border: 3px solid #1d2d44;
+      border-radius: 5px;
+      outline: 0;
+      background-color: #3e5c76;
+      color: #F0EBD8;
+      text-transform: uppercase;
+      font-weight: bold;
+      letter-spacing: 0.1rem;
+      cursor: pointer;
+    }
+    button:disabled { opacity: 0.7; cursor: not-allowed; }
+    .device {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem 1rem;
+      margin: 0.75rem 0; padding: 0.75rem 1rem;
+      background-color: #FAF7EE; border: 3px solid #1d2d44; border-radius: 5px;
+    }
+    .device .info { flex: 1 1 10rem; min-width: 0; }
+    .device .name { font-weight: bold; overflow-wrap: anywhere; }
+    .device .port { font-size: 0.85rem; color: #3e5c76; }
+    .device .actions { display: flex; align-items: center; gap: 1rem; margin-left: auto; }
+    .status { padding: 0.1rem 1rem; border-radius: 1rem; border: 3px solid transparent; white-space: nowrap; }
+    .status.online { background-color: green; color: #F0EBD8; }
+    .status.pending { background-color: yellow; }
+    .status.offline { background-color: red; color: #F0EBD8; }
+    .status.unknown { border-color: black; }
+    .status.standby { background-color: #2a9d8f; color: #0D1321; }
+    .status.nolink { border-color: #6b6b6b; color: #6b6b6b; }
+    .error { flex-basis: 100%; color: red; }
+    /* Phones: a big, full-width Wake Up button beside the status pill. */
+    @media (max-width: 30rem) {
+      .device .actions { flex-basis: 100%; }
+      .device .status { min-width: 7rem; box-sizing: border-box; text-align: center; }
+      .device button { flex: 1; min-height: 3rem; font-size: 1rem; }
+    }
+    #banner { padding: 0.5rem 1rem; border: 3px solid red; border-radius: 5px; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <div class="content">
+    <h1>Wake on LAN</h1>
+    <div id="banner" hidden>Can't reach the Pi. Retrying&hellip;</div>
+    <div id="devices"></div>
+  </div>
+  <script>
+    (function () {
+      "use strict";
+      var POLL_MS = 10000;
+      var WAKE_TIMEOUT_MS = 120000;
+      var waking = {};  // device id -> time the wake was sent (ms)
+      var errors = {};  // device id -> last wake error message
+      var devices = [];
+      var list = document.getElementById("devices");
+      var banner = document.getElementById("banner");
+
+      function el(tag, className, text) {
+        var node = document.createElement(tag);
+        if (className) node.className = className;
+        if (text !== undefined) node.textContent = text;  // never innerHTML
+        return node;
+      }
+
+      function render() {
+        list.textContent = "";
+        devices.forEach(function (d) {
+          var isWaking = waking[d.id] !== undefined;
+          var row = el("div", "device");
+          var info = el("div", "info");
+          info.appendChild(el("div", "name", d.name));
+          if (d.interface) info.appendChild(el("div", "port", "Pi port " + d.interface));
+          row.appendChild(info);
+          // Pill and button stay together, so narrow screens wrap them as one unit.
+          var actions = el("div", "actions");
+          actions.appendChild(el("span", "status " + (isWaking ? "pending" : d.status),
+                                 isWaking ? "waking" : d.status));
+          var button = el("button", null, isWaking ? "Waking…" : "Wake Up");
+          button.type = "button";
+          button.disabled = isWaking;
+          button.addEventListener("click", function () { wake(d.id); });
+          actions.appendChild(button);
+          row.appendChild(actions);
+          if (errors[d.id]) row.appendChild(el("div", "error", errors[d.id]));
+          list.appendChild(row);
+        });
+      }
+
+      function refresh() {
+        fetch("/api/devices", { cache: "no-store" })
+          .then(function (r) {
+            if (!r.ok) throw new Error("HTTP " + r.status);
+            return r.json();
+          })
+          .then(function (data) {
+            banner.hidden = true;
+            var now = Date.now();
+            data.forEach(function (d) {
+              var sent = waking[d.id];
+              if (sent !== undefined && (d.status === "online" || now - sent > WAKE_TIMEOUT_MS)) {
+                delete waking[d.id];
+              }
+            });
+            devices = data;
+            render();
+          })
+          .catch(function () { banner.hidden = false; });
+      }
+
+      function wake(id) {
+        delete errors[id];
+        waking[id] = Date.now();
+        render();
+        fetch("/api/wake/" + id, { method: "POST", headers: { "X-WWOL": "1" } })
+          .then(function (r) {
+            return r.json().catch(function () {
+              return { ok: false, error: "HTTP " + r.status };
+            });
+          })
+          .then(function (result) {
+            if (!result.ok) {
+              delete waking[id];
+              errors[id] = result.error || "Wake failed";
+            }
+            render();
+          })
+          .catch(function () {
+            delete waking[id];
+            errors[id] = "Can't reach the Pi";
+            render();
+          });
+      }
+
+      refresh();
+      setInterval(refresh, POLL_MS);
+    })();
+  </script>
+</body>
+</html>

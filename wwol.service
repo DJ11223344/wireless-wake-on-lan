@@ -1,0 +1,18 @@
+[Unit]
+Description=wwol Wake-on-LAN web app
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=wwol
+Group=wwol
+WorkingDirectory=/opt/wwol
+ExecStart=/usr/bin/python3 -m wwol.server --config /opt/wwol/config.json
+Environment=PYTHONUNBUFFERED=1
+Restart=on-failure
+RestartSec=5
+# Lets ping work for the unprivileged wwol user on minimal images.
+AmbientCapabilities=CAP_NET_RAW
+
+[Install]
+WantedBy=multi-user.target
